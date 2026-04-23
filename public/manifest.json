@@ -1,0 +1,16 @@
+{
+  "name": "Keuanganku",
+  "short_name": "Keuanganku",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#10b981",
+  "icons": [
+    {
+      "src": "/Logo_Keuangan.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
