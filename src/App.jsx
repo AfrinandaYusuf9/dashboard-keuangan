@@ -11,6 +11,7 @@ import Transactions from './pages/Transactions'
 import Budget from './pages/Budget'
 import Assets from './pages/Assets'
 import Settings from './pages/Settings'
+import Planning from './pages/Planning'
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth()
@@ -37,6 +38,7 @@ function App() {
                 <Route path="transactions" element={<Transactions />} />
                 <Route path="budget" element={<Budget />} />
                 <Route path="assets" element={<Assets />} />
+                <Route path="planning" element={<Planning />} />
                 <Route path="settings" element={<Settings />} />
               </Route>
             </Routes>
