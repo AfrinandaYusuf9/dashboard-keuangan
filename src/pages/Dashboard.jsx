@@ -7,7 +7,7 @@ import { supabase } from '../lib/supabaseClient'
 import { ensureBudgetExists } from '../utils/budgetUtils'
 import { formatCurrency } from '../utils/formatCurrency'
 import MonthPicker from '../components/MonthPicker'
-import { Plus, Wallet, TrendingUp, TrendingDown, LayoutDashboard, Eye, EyeOff } from 'lucide-react'
+import { Plus, Wallet, TrendingUp, TrendingDown, LayoutDashboard, Eye, EyeOff, ChevronDown } from 'lucide-react'
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -20,10 +20,10 @@ export default function Dashboard() {
   const [incomeData, setIncomeData] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNetWorth, setShowNetWorth] = useState(true)
+  const [expandedPosId, setExpandedPosId] = useState(null) // accordion state
 
   const displayName = user?.email?.split('@')[0] || 'User'
 
-  // We don't render 'todayDateStr' anymore since the context is selectedMonth. We can render the active month name.
   const getMonthStr = (dateStr) => {
     const d = new Date(dateStr)
     return d.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })
@@ -39,7 +39,7 @@ export default function Dashboard() {
     try {
       setLoading(true)
       
-      const currentMonthPos = selectedMonth // this is already YYYY-MM-01
+      const currentMonthPos = selectedMonth
       
       const d = new Date(selectedMonth)
       const year = d.getFullYear()
@@ -74,19 +74,39 @@ export default function Dashboard() {
         .lte('date', currentMonthEndTrx)
       if (trxErr) throw trxErr
 
-      // Aggregate data
+      // Aggregate data — now includes per-sub-item breakdown
       const processedExpenses = []
       const processedIncomes = []
 
       posData?.forEach(pos => {
-        const subItemIds = pos.budget_sub_items?.map(s => s.id) || []
-        const totalRealisasi = trxData
-          ?.filter(trx => {
-             const trxMatch = (pos.type === 'expense' && trx.type === 'out') || (pos.type === 'income' && trx.type === 'in');
-             return trxMatch && subItemIds.includes(trx.budget_sub_item_id)
-          })
-          .reduce((sum, trx) => sum + Number(trx.amount), 0) || 0
-        const budgetAmount = pos.budget_sub_items?.reduce((s, curr) => s + Number(curr.budget_amount || 0), 0) || 0
+        const subItems = pos.budget_sub_items || []
+        const subItemIds = subItems.map(s => s.id)
+
+        // Calculate per-sub-item realisasi
+        const subItemDetails = subItems.map(sub => {
+          const subRealisasi = trxData
+            ?.filter(trx => {
+              const trxMatch = (pos.type === 'expense' && trx.type === 'out') || (pos.type === 'income' && trx.type === 'in')
+              return trxMatch && trx.budget_sub_item_id === sub.id
+            })
+            .reduce((sum, trx) => sum + Number(trx.amount), 0) || 0
+          
+          const subBudget = Number(sub.budget_amount || 0)
+          let subPercentage = 0
+          if (subBudget > 0) subPercentage = (subRealisasi / subBudget) * 100
+
+          return {
+            id: sub.id,
+            name: sub.name,
+            budget: subBudget,
+            realisasi: subRealisasi,
+            percentage: isFinite(subPercentage) ? subPercentage : 0,
+            isOverbudget: subRealisasi > subBudget && subBudget > 0,
+          }
+        })
+
+        const totalRealisasi = subItemDetails.reduce((s, si) => s + si.realisasi, 0)
+        const budgetAmount = subItemDetails.reduce((s, si) => s + si.budget, 0)
 
         if (pos.type === 'expense') {
           let percentage = 0
@@ -98,7 +118,8 @@ export default function Dashboard() {
             realisasi: totalRealisasi,
             sisa: Math.max(0, budgetAmount - totalRealisasi),
             percentage: isFinite(percentage) ? percentage : 0,
-            isOverbudget: totalRealisasi > budgetAmount
+            isOverbudget: totalRealisasi > budgetAmount,
+            subItems: subItemDetails, // ← NEW: per-sub-item breakdown
           })
         } else if (pos.type === 'income') {
           processedIncomes.push({ id: pos.id, name: pos.name, budget: budgetAmount, realisasi: totalRealisasi })
@@ -120,6 +141,16 @@ export default function Dashboard() {
     if (percentage >= 100) return 'bg-red-500'
     if (percentage >= 80) return 'bg-yellow-400'
     return 'bg-[var(--color-primary)]' 
+  }
+
+  const getSubProgressBarColor = (percentage) => {
+    if (percentage >= 100) return 'bg-red-400'
+    if (percentage >= 80) return 'bg-yellow-300'
+    return 'bg-emerald-300'
+  }
+
+  const handleToggleExpand = (posId) => {
+    setExpandedPosId(prev => prev === posId ? null : posId)
   }
 
   const netWorth = totalBalance + totalAssetValue
@@ -213,7 +244,7 @@ export default function Dashboard() {
             </div>
           )}
 
-          {/* Progress Pos Anggaran (Pengeluaran) */}
+          {/* Progress Pos Anggaran (Pengeluaran) — with Accordion */}
           <div className="space-y-4">
              <div className="flex justify-between items-end">
                 <h3 className="font-bold text-gray-900 text-sm pl-1 flex items-center gap-1.5">
@@ -228,33 +259,90 @@ export default function Dashboard() {
                  budgetData.map((exp) => {
                    const progressColor = getProgressBarColor(exp.percentage)
                    const cappedPercentage = Math.min(exp.percentage, 100)
+                   const isExpanded = expandedPosId === exp.id
+                   const hasSubItems = exp.subItems && exp.subItems.length > 0
 
                    return (
-                     <div key={exp.id} className="bg-white/80 backdrop-blur-sm p-4 rounded-2xl border border-gray-100 shadow-sm">
-                       <div className="flex justify-between items-end mb-2">
-                         <div>
-                           <p className="font-semibold text-gray-800 text-sm">{exp.name}</p>
-                           <p className="text-xs text-gray-500">Target: {formatCurrency(exp.budget)}</p>
+                     <div key={exp.id} className="bg-white/80 backdrop-blur-sm rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                       {/* Main Card — Clickable */}
+                       <button
+                         onClick={() => hasSubItems && handleToggleExpand(exp.id)}
+                         className={`w-full text-left p-4 transition-colors ${hasSubItems ? 'cursor-pointer hover:bg-gray-50/50 active:bg-gray-100/50' : ''}`}
+                       >
+                         <div className="flex justify-between items-end mb-2">
+                           <div>
+                             <div className="flex items-center gap-1.5">
+                               <p className="font-semibold text-gray-800 text-sm">{exp.name}</p>
+                               {hasSubItems && (
+                                 <ChevronDown 
+                                   size={14} 
+                                   className={`text-gray-400 transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`} 
+                                 />
+                               )}
+                             </div>
+                             <p className="text-xs text-gray-500">Target: {formatCurrency(exp.budget)}</p>
+                           </div>
+                           <div className="text-right">
+                             <p className={`text-xs font-bold ${exp.isOverbudget ? 'text-red-500' : 'text-gray-900'}`}>
+                               {exp.isOverbudget ? 'OVERBUDGET' : `Sisa ${formatCurrency(exp.sisa)}`}
+                             </p>
+                           </div>
                          </div>
-                         <div className="text-right">
-                           <p className={`text-xs font-bold ${exp.isOverbudget ? 'text-red-500' : 'text-gray-900'}`}>
-                             {exp.isOverbudget ? 'OVERBUDGET' : `Sisa ${formatCurrency(exp.sisa)}`}
+                         
+                         <div className="h-2.5 w-full bg-gray-100 rounded-full overflow-hidden mb-2">
+                           <div 
+                             className={`h-full ${progressColor} transition-all duration-500 ease-out`} 
+                             style={{ width: `${cappedPercentage}%` }}
+                           ></div>
+                         </div>
+                         
+                         <div className="flex justify-between items-center text-[11px]">
+                           <p className="text-gray-500">Terpakai: {formatCurrency(exp.realisasi)}</p>
+                           <p className={`font-semibold ${exp.isOverbudget ? 'text-red-500' : 'text-gray-400'}`}>
+                             {exp.percentage.toFixed(0)}%
                            </p>
                          </div>
-                       </div>
-                       
-                       <div className="h-2.5 w-full bg-gray-100 rounded-full overflow-hidden mb-2">
-                         <div 
-                           className={`h-full ${progressColor} transition-all duration-500 ease-out`} 
-                           style={{ width: `${cappedPercentage}%` }}
-                         ></div>
-                       </div>
-                       
-                       <div className="flex justify-between items-center text-[11px]">
-                         <p className="text-gray-500">Terpakai: {formatCurrency(exp.realisasi)}</p>
-                         <p className={`font-semibold ${exp.isOverbudget ? 'text-red-500' : 'text-gray-400'}`}>
-                           {exp.percentage.toFixed(0)}%
-                         </p>
+                       </button>
+
+                       {/* Expanded Sub-Items Section */}
+                       <div 
+                         className="overflow-hidden transition-all duration-300 ease-in-out"
+                         style={{ 
+                           maxHeight: isExpanded ? `${(exp.subItems?.length || 0) * 80 + 16}px` : '0px',
+                           opacity: isExpanded ? 1 : 0,
+                         }}
+                       >
+                         <div className="px-4 pb-4 space-y-2 border-t border-gray-100 pt-3">
+                           {exp.subItems?.map(sub => {
+                             const subColor = getSubProgressBarColor(sub.percentage)
+                             const subCapped = Math.min(sub.percentage, 100)
+
+                             return (
+                               <div key={sub.id} className="bg-gray-50/80 rounded-xl p-3 ml-2 border border-gray-100/60">
+                                 <div className="flex justify-between items-center mb-1.5">
+                                   <p className="text-xs font-semibold text-gray-700 truncate mr-2">{sub.name}</p>
+                                   <p className="text-[10px] text-gray-500 shrink-0 font-medium">
+                                     {formatCurrency(sub.realisasi)} / {formatCurrency(sub.budget)}
+                                   </p>
+                                 </div>
+                                 <div className="h-1.5 w-full bg-gray-200/70 rounded-full overflow-hidden">
+                                   <div 
+                                     className={`h-full ${subColor} transition-all duration-500 ease-out rounded-full`}
+                                     style={{ width: `${subCapped}%` }}
+                                   ></div>
+                                 </div>
+                                 <div className="flex justify-between mt-1">
+                                   <span className={`text-[9px] font-bold ${sub.isOverbudget ? 'text-red-500' : 'text-gray-400'}`}>
+                                     {sub.percentage.toFixed(0)}%
+                                   </span>
+                                   {sub.isOverbudget && (
+                                     <span className="text-[9px] font-bold text-red-500">OVER</span>
+                                   )}
+                                 </div>
+                               </div>
+                             )
+                           })}
+                         </div>
                        </div>
                      </div>
                    )
